@@ -13,7 +13,7 @@ git clone https://github.com/symmetry-protocol/symmetry-cli.git
 cd symmetry-cli
 npm ci --ignore-scripts --no-audit --no-fund
 npm pack
-npm install --global ./symmetry-hq-cli-0.1.0.tgz
+npm install --global ./symmetry-hq-cli-0.2.0.tgz
 symmetry --help
 symmetry status
 ```
@@ -29,7 +29,6 @@ symmetry --network mainnet wallet balance
 symmetry vault list --limit 10 --json
 symmetry vault show --vault VAULT_STATE_ADDRESS
 symmetry vault from-mint --mint VAULT_SHARE_TOKEN_MINT
-symmetry token list
 symmetry token show --mint TOKEN_MINT
 symmetry vault price --vault VAULT_STATE_ADDRESS
 ```
@@ -51,7 +50,7 @@ Settings are resolved in order: command flags, `SYMMETRY_*` environment variable
 ## Create and compose a basket
 
 ```sh
-symmetry vault create --input examples/create.json --request-id first-core-basket --json
+symmetry vault create --input examples/create.json --request-id first-basket --json
 ```
 
 This prepares a plan and returns its `id`, `digest`, predicted vault/mint addresses, and actions. It sends no transaction. By default new vaults are **private**, as specified by the program.
@@ -65,12 +64,28 @@ symmetry transaction execute PLAN_ID --approve PLAN_DIGEST
 On an interactive terminal, `execute` can omit `--approve` and ask for confirmation. To explicitly authorize immediate execution of an action in a script:
 
 ```sh
-symmetry vault create --input examples/create.json --request-id first-core-basket --execute --yes
+symmetry vault create --input examples/create.json --request-id first-basket --execute --yes
 ```
 
 Use the same request ID when retrying the same logical request. Different input with the same ID is rejected. An expired unsubmitted plan requires a new request ID after review. `transaction list` locates saved plans after a terminal or process interruption.
 
-`vault create` optionally adds supported assets and configures weights after creation. `vault compose` updates an existing vault. Weight changes are built against the current on-chain composition **after** all add-token steps confirm. Final weights are read back and verified. Curated mint/Pyth pairs come from the existing Symmetry UI registry and are checked on-chain for account owner and feed identity. This automatic registry is mainnet-only. Advanced integrations can use `vault token-set` with explicitly reviewed oracle settings.
+The creation example requests a vault without a target allocation. Select assets and configure their allocation before depositing. The protocol initializes SOL/USDC custody assets; those protocol accounts do not define the basket’s investment theme.
+
+Asset discovery and oracle selection belong to the user or calling agent. The CLI has no token catalog, recommended portfolio or mint-to-oracle registry. Discover candidate mints through sources such as [Jupiter Tokens](https://developers.jup.ag/docs/tokens/token-information) and verify their identity against the issuer’s published mint addresses. For tokenized stocks, verify the issuer and underlying security, token mechanics and available liquidity. A ticker match or a quoted USD price does not establish an on-chain oracle pairing. Keep the requested exposure; if the requested assets or suitable oracles cannot be verified, explain the gap and ask the user before changing the allocation.
+
+`vault create` and `vault compose` accept `assets`, each with `mint`, `weightBps` and an optional `token` configuration. Supply `token` for every new or inactive asset. It uses the same complete structure as `vault token-set`: `token_mint`, `active`, aggregator settings and `oracles`. The configuration must match the asset mint and set `active: true`. A token already active in the target vault retains its on-chain settings when `token` is omitted; supplying `token` explicitly updates them. Creation can also retain the protocol-initialized custody settings. Missing configurations are rejected before a creation plan is built.
+
+`vault add-token` and `vault token-set` require `{ "vault": "VAULT_STATE_ADDRESS", "token": { ... } }`. Inspect the exact fields with:
+
+```sh
+symmetry schema vault.create
+symmetry schema vault.compose
+symmetry schema vault.token-set
+```
+
+Choose and verify each oracle’s account, mint pairing, quote currency, decimals, freshness, confidence, liquidity and other thresholds. Pyth, Raydium CPMM and Raydium CLMM are available oracle implementations; the CLI does not select a feed or pool for a mint. JSON validation and transaction simulation do not establish that an oracle prices the intended economic asset.
+
+Weight changes are built against the current on-chain composition **after** all token-configuration steps confirm. Final weights are read back and verified. `vault weights` accepts only mints and weights; use the configuration commands to change oracles.
 
 Composition with time locks requires separate `add-token` and `weights` intents, followed by `intent execute` when eligible. Existing active assets omitted from the target allocation get zero weight; they are not automatically removed. Configuring weights does not itself trade existing vault balances: use `vault rebalance` when appropriate.
 
@@ -100,11 +115,9 @@ Deposits include a separate dependent action that locks the deposited assets. An
 
 Withdrawals default to keeping **all underlying assets in kind**. Set `keepTokens` explicitly to choose which assets are not rebalanced. Confirmation means the submitted transaction confirmed; auction settlement, share minting, token redemption and bounty claims may remain. Inspect `rebalance show`; eligible actions include `rebalance prices`, `rebalance mint`, `rebalance redeem`, and `rebalance claim-bounty`. Keeper auctions require available market liquidity and running protocol keepers; this CLI does not run an unattended swap-solving service.
 
-`rebalance prices` uses already-published on-chain oracle accounts by default (`refreshPyth: false`). **No Hermes API key is required.** Pyth sponsors updates for SOL/USD, USDC/USD, USDT/USD and other [listed Solana push feeds](https://docs.pyth.network/price-feeds/core/push-feeds/solana). Feed availability and update schedules can change; a mint's presence in the CLI registry is not a guarantee of ongoing publication. The program enforces confidence, freshness and intent timing. Wait until the intent is eligible and the feeds are fresh; never disable these checks to force settlement.
+`rebalance prices` uses the vault’s configured on-chain oracle accounts by default (`refreshPyth: false`). **No Hermes API key is required for this mode.** Verify that your chosen feeds have an active publisher and updates that satisfy the vault’s settings and protocol custody requirements. See the provider’s current [Solana push-feed information](https://docs.pyth.network/price-feeds/core/push-feeds/solana). The program enforces confidence, freshness and intent timing. Wait until the intent is eligible and the feeds are fresh; never disable these checks to force settlement.
 
-Use `symmetry token list --check-prices true` before selecting assets for this workflow. It reads feed identity, verification and age against the on-chain Clock in one RPC snapshot, marking stale/missing/invalid feeds. The reported age limits are 600 seconds for curated assets and 120 seconds for the mandatory SOL/USDC custody feeds. This checks publication freshness, not every confidence/volatility constraint or your existing vault's custom settings. Without the flag, `token list` remains an offline registry lookup.
-
-To explicitly publish fresh Pyth data, use `symmetry rebalance prices --intent ADDRESS --refresh-pyth true`. This optional mode needs authorized Hermes access (`PYTH_API_KEY` in the environment, or a compatible `--hermes-url` / `SYMMETRY_HERMES_URL` HTTPS provider). URL credentials and redirects are rejected. Authentication failure returns `ORACLE_AUTH_REQUIRED`. For assets without an active publisher, configure a supported alternative oracle through `vault token-set`, arrange publication, or leave the asset out. Do not assume every curated feed is sponsored.
+To explicitly publish fresh Pyth data, use `symmetry rebalance prices --intent ADDRESS --refresh-pyth true`. This optional mode needs authorized Hermes access (`PYTH_API_KEY` in the environment, or a compatible `--hermes-url` / `SYMMETRY_HERMES_URL` HTTPS provider). URL credentials and redirects are rejected. Authentication failure returns `ORACLE_AUTH_REQUIRED`. If a chosen feed is unavailable, resolve publication or review another suitable oracle with the user before proceeding. Never substitute a different token to bypass an oracle configuration problem.
 
 `fees withdraw` withdraws and claims only positive fee categories authorized for the signer. `NO_FEES` means there are no new eligible fees. If a previous withdrawal left an account behind, use `fees list` and `fees claim` to recover it before withdrawing that category again.
 
@@ -165,14 +178,14 @@ Default MCP tools read data, prepare plans, inspect, export, and simulate. They 
 | `rebalance` | list, show, prices, mint, redeem, cancel, claim-bounty |
 | `fees` | list, withdraw, claim |
 | `transaction` | list, inspect, next, simulate, execute, submit, status |
-| Other | status, wallet address/balance, token list/show, config show/set, schema, agent-context, mcp |
+| Other | status, wallet address/balance, token show, config show/set, schema, agent-context, mcp |
 
 `vault edit` supports creator, managers/authorities, fees, schedule, automation, metadata and deposit settings. The protocol enforces permissions and delays. Disabled management/performance fees must remain zero.
 
 Piped output defaults to one JSON result on stdout. Use `--json` explicitly in agents. Diagnostics and prompts go to stderr. Terminal output is indented for readability. SDK-formatted balances may be approximate; use `exact`/`exactTokens` and wallet amount strings for accounting.
 
 ```json
-{ "ok": true, "data": {}, "meta": { "schemaVersion": 1, "cliVersion": "0.1.0" } }
+{ "ok": true, "data": {}, "meta": { "schemaVersion": 1, "cliVersion": "0.2.0" } }
 ```
 
 Errors use `{ "ok": false, "error": { "code": "...", "message": "...", "details": {}, "retryable": false }, "meta": {...} }`. Exit codes: 0 success, 1 operation failure, 2 invalid input, 3 missing execution approval, 4 confirmation pending. `--help` and `--version` are plain text.

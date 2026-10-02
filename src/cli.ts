@@ -11,7 +11,7 @@ import { Transactions, type Plan } from './transactions.js';
 // Dependency diagnostics must never corrupt JSON or MCP stdout.
 console.log = (...values: unknown[]) => console.error(...values);
 process.stdout.on('error', (error: NodeJS.ErrnoException) => { if (error.code === 'EPIPE') process.exit(0); else throw error; });
-const program = new Command().name('symmetry').description('Symmetry v3 vaults for humans and agents. Writes prepare plans by default.').version('0.1.0')
+const program = new Command().name('symmetry').description('Symmetry v3 vaults for humans and agents. Writes prepare plans by default.').version('0.2.0')
   .option('--json', 'Machine-readable output (also default when stdout is piped)')
   .option('-o, --output <format>', 'json or human')
   .option('--network <network>', 'mainnet or devnet')
@@ -25,7 +25,7 @@ const program = new Command().name('symmetry').description('Symmetry v3 vaults f
   .option('--timeout-ms <number>', 'RPC and confirmation timeout', Number)
   .exitOverride();
 const machine = () => program.opts().json || program.opts().output === 'json' || (!process.stdout.isTTY && program.opts().output !== 'human');
-function output(data: unknown) { process.stdout.write(json({ ok: true, data, meta: { schemaVersion: 1, cliVersion: '0.1.0' } }, !machine()) + '\n'); }
+function output(data: unknown) { process.stdout.write(json({ ok: true, data, meta: { schemaVersion: 1, cliVersion: '0.2.0' } }, !machine()) + '\n'); }
 async function runtime() {
   const options = program.opts();
   if (options.output && !['json', 'human'].includes(options.output)) throw new CliError('INVALID_INPUT', 'Output must be json or human.');
@@ -126,7 +126,7 @@ catch (error) {
   if (error instanceof CommanderError && error.exitCode === 0) process.exitCode = 0;
   else {
     const failure = error instanceof CommanderError ? { code: 'INVALID_INPUT', message: error.message, retryable: false } : errorResult(error);
-    process.stdout.write(json({ ok: false, error: failure, meta: { schemaVersion: 1, cliVersion: '0.1.0' } }, !machine()) + '\n');
+    process.stdout.write(json({ ok: false, error: failure, meta: { schemaVersion: 1, cliVersion: '0.2.0' } }, !machine()) + '\n');
     process.exitCode = failure.code === 'INVALID_INPUT' ? 2 : failure.code === 'APPROVAL_REQUIRED' ? 3 : failure.code === 'CONFIRMATION_PENDING' ? 4 : 1;
   }
 }

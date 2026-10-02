@@ -4,7 +4,7 @@ import { address, bps, empty, rawAmount, uint } from './lib/utils.js';
 const text = (bytes: number) => z.string().max(bytes).refine(value => Buffer.byteLength(value) >= 3 && Buffer.byteLength(value) <= bytes, `Use 3-${bytes} UTF-8 bytes`);
 const symbol = text(10).regex(/^[A-Za-z0-9]+$/, 'Use only ASCII letters and digits');
 const uri = z.string().max(200).refine(value => Buffer.byteLength(value) <= 200 && (value === '' || /^(https:\/\/|ipfs:\/\/)/.test(value)), 'Use HTTPS or IPFS, at most 200 UTF-8 bytes');
-const assets = z.array(z.strictObject({ mint: address, weightBps: bps })).min(1).max(100)
+const weights = z.array(z.strictObject({ mint: address, weightBps: bps })).min(1).max(100)
   .refine(items => new Set(items.map(item => item.mint)).size === items.length, 'Duplicate mints')
   .refine(items => items.reduce((sum, item) => sum + item.weightBps, 0) === 10_000, 'Weights must total 10000 bps');
 const context = { activationTimestamp: uint.optional(), expirationTimestamp: uint.optional() };
@@ -27,6 +27,12 @@ const token = z.strictObject({
   min_conf_bps: bps, conf_thresh_bps: bps, conf_multiplier: uint.min(1).max(65535),
   oracles: z.array(oracle).min(1).max(4),
 }).refine(value => value.min_oracles_thresh <= value.oracles.length, 'Not enough oracles');
+const assets = z.array(z.strictObject({
+  mint: address, weightBps: bps,
+  token: token.optional().describe('Caller-selected oracle configuration. Required for new or inactive assets; omit to retain settings for an asset already active in the target vault.'),
+}).refine(value => !value.token || (value.token.token_mint === value.mint && value.token.active), 'Token configuration must match the asset mint and be active')).min(1).max(100)
+  .refine(items => new Set(items.map(item => item.mint)).size === items.length, 'Duplicate mints')
+  .refine(items => items.reduce((sum, item) => sum + item.weightBps, 0) === 10_000, 'Weights must total 10000 bps');
 const fees = z.strictObject({
   creator_deposit_fee_bps: bps, creator_withdraw_fee_bps: bps,
   creator_management_fee_bps: z.literal(0), creator_performance_fee_bps: z.literal(0),
@@ -51,17 +57,16 @@ export const commands = {
   'status': read('Check RPC cluster and deployed Symmetry program/configuration.', empty),
   'wallet.address': read('Show the configured public key. Never exports secret keys.', empty),
   'wallet.balance': read('SOL and SPL balances in exact raw units.', z.strictObject({ owner: address.optional() })),
-  'token.list': read('List curated mainnet mint-to-Pyth mappings; checkPrices reads on-chain feed identity and age.', z.strictObject({ checkPrices: z.boolean().default(false) })),
   'token.show': read('Read mint decimals, exact supply, token program and mint authorities.', z.strictObject({ mint: address })),
   'vault.list': read('List vaults with optional role filtering and pagination.', filter),
   'vault.show': read('Fetch a vault by state address, including exact on-chain amounts.', vault),
   'vault.price': read('Read indicative on-chain oracle valuation, with explicit price units. This is not an execution quote.', vault),
   'vault.from-mint': read('Find a vault by its share-token mint.', z.strictObject({ mint: address })),
-  'vault.create': write('Create a private vault. Optional assets are configured in subsequent verified steps.', z.strictObject({ name: text(32), symbol, metadataUri: uri.default(''), startPrice: z.string().regex(/^[0-9]+(?:\.[0-9]+)?$/).refine(value => Number(value) > 0.000001 && Number(value) <= 1_000_000, 'Start price must be > 0.000001 and <= 1000000').default('1'), assets: assets.optional() })),
-  'vault.compose': write('Add supported assets, then apply target weights after fetching the updated composition.', z.strictObject({ vault: address, assets })),
-  'vault.weights': write('Set weights for existing active assets; omitted assets receive zero weight.', z.strictObject({ vault: address, assets, ...context })),
-  'vault.add-token': write('Add a curated mainnet asset with verified Pyth feed identity.', z.strictObject({ vault: address, mint: address })),
-  'vault.token-set': write('Advanced: configure Pyth, Raydium CPMM or Raydium CLMM oracles. Caller must verify the mint/oracle pairing.', z.strictObject({ vault: address, token, ...context })),
+  'vault.create': write('Create a private vault with caller-selected assets. Supply explicit token/oracle settings for each new asset; no asset discovery or recommendations.', z.strictObject({ name: text(32), symbol, metadataUri: uri.default(''), startPrice: z.string().regex(/^[0-9]+(?:\.[0-9]+)?$/).refine(value => Number(value) > 0.000001 && Number(value) <= 1_000_000, 'Start price must be > 0.000001 and <= 1000000').default('1'), assets: assets.optional() })),
+  'vault.compose': write('Compose caller-selected assets and weights. New or inactive assets require explicit token/oracle settings; settings already active in the target vault are retained when omitted.', z.strictObject({ vault: address, assets })),
+  'vault.weights': write('Set weights for existing active assets; omitted assets receive zero weight.', z.strictObject({ vault: address, assets: weights, ...context })),
+  'vault.add-token': write('Add or reactivate a caller-selected asset with explicit oracle settings. Caller must verify the mint/oracle pairing.', z.strictObject({ vault: address, token: token.refine(value => value.active, 'Added tokens must be active'), ...context })),
+  'vault.token-set': write('Configure caller-selected Pyth, Raydium CPMM or Raydium CLMM oracles. Caller must verify the mint/oracle pairing and choose all risk thresholds.', z.strictObject({ vault: address, token, ...context })),
   'vault.edit': write('Change vault settings through protocol permission checks and time locks.', z.strictObject({ vault: address, change: settings, ...context })),
   'vault.deposit': write('Deposit raw token units and lock deposits. Settlement proceeds through keepers.', z.strictObject({ vault: address, contributions: z.array(z.strictObject({ mint: address, amount: rawAmount })).min(1).max(100).refine(items => new Set(items.map(item => item.mint)).size === items.length, 'Duplicate contribution mints'), ...trade })),
   'vault.deposit-more': write('Add contributions to an existing unlocked deposit intent.', z.strictObject({ intent: address, contributions: z.array(z.strictObject({ mint: address, amount: rawAmount })).min(1).max(100).refine(items => new Set(items.map(item => item.mint)).size === items.length, 'Duplicate contribution mints') })),

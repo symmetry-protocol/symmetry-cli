@@ -39,8 +39,11 @@ test('MCP handshake, tool schemas, validation, and resources work over real stdi
     const listed = await client.listTools();
     assert.equal(listed.tools.length, Object.keys(commands).length + 4);
     assert.equal(listed.tools.some(tool => tool.name === 'symmetry_transaction_execute'), false);
-    const tokenResult = await client.callTool({ name: 'symmetry_token_list', arguments: {} });
-    assert.equal(tokenResult.isError, undefined);
+    assert.equal(listed.tools.some(tool => tool.name === 'symmetry_token_list'), false);
+    const addToken = listed.tools.find(tool => tool.name === 'symmetry_vault_add_token')!;
+    assert.ok(addToken.inputSchema.required?.includes('token'));
+    const legacy = await client.callTool({ name: addToken.name, arguments: { vault: '11111111111111111111111111111111', mint: 'So11111111111111111111111111111111111111112' } });
+    assert.equal(legacy.isError, true);
     const invalid = await client.callTool({ name: 'symmetry_vault_create', arguments: { name: 'A', symbol: 'A', startPrice: '-1' } });
     assert.equal(invalid.isError, true);
     const context = await client.readResource({ uri: 'symmetry://context' });

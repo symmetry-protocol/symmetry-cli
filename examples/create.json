@@ -1,9 +1,5 @@
 {
-  "name": "Core Basket",
-  "symbol": "CORE",
-  "startPrice": "1",
-  "assets": [
-    { "mint": "So11111111111111111111111111111111111111112", "weightBps": 6000 },
-    { "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "weightBps": 4000 }
-  ]
+  "name": "My Basket",
+  "symbol": "BASKET",
+  "startPrice": "1"
 }

@@ -9,7 +9,6 @@ import { getPythPriceFeedAccountAddress } from '@symmetry-hq/sdk/dist/states/ora
 import { parse } from '../src/commands.js';
 import { configSchema } from '../src/config.js';
 import { hermesClient, priceTransactions } from '../src/prices.js';
-import registry from '../src/oracles.json' with { type: 'json' };
 
 const address = () => Keypair.generate().publicKey;
 const config = configSchema.parse({ hermesUrl: 'https://prices.example/base/', timeoutMs: 1000 });
@@ -202,8 +201,8 @@ test('explicit Pyth refresh preserves multiple shards of one feed through the re
   f.feeds[1] = getPythPriceFeedAccountAddress(3, Buffer.from(feedId, 'hex'));
   f.luts[0]!.state.addresses = f.feeds;
   const ids = new Map<string, string>([
-    [PYTHNET_CUSTODY_PRICE_WSOL_ACCOUNT.toBase58(), registry['So11111111111111111111111111111111111111112'].feedId],
-    [PYTHNET_CUSTODY_PRICE_USDC_ACCOUNT.toBase58(), registry['EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'].feedId],
+    [PYTHNET_CUSTODY_PRICE_WSOL_ACCOUNT.toBase58(), 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d'],
+    [PYTHNET_CUSTODY_PRICE_USDC_ACCOUNT.toBase58(), 'eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a'],
     ...f.feeds.map(key => [key.toBase58(), feedId] as [string, string]),
   ]);
   const getAccounts = f.connection.getMultipleAccountsInfo.bind(f.connection);

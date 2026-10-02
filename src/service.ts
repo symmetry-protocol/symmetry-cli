@@ -1,22 +1,18 @@
-import { PublicKey, SYSVAR_CLOCK_PUBKEY, type Connection } from '@solana/web3.js';
+import { PublicKey, type Connection } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, unpackMint } from '@solana/spl-token';
-import { SymmetryCore, type AddOrEditTokenInput, type TxPayloadBatchSequence, type Vault, type VaultCreationTx } from '@symmetry-hq/sdk';
+import { SymmetryCore, type TxPayloadBatchSequence, type Vault, type VaultCreationTx } from '@symmetry-hq/sdk';
 import { VAULTS_V3_PROGRAM_ID, MINTS } from '@symmetry-hq/sdk/dist/constants.js';
 import { getRebalanceIntentPda } from '@symmetry-hq/sdk/dist/instructions/pda.js';
 import { RebalanceAction, RebalanceType } from '@symmetry-hq/sdk/dist/layouts/intents/rebalanceIntent.js';
-import { PythState } from '@symmetry-hq/sdk/dist/states/oracles/pythOracle.js';
 import { delay } from '@symmetry-hq/sdk/dist/txUtils.js';
 import { commands, parse, type Action, type CommandName, type Input } from './commands.js';
 import { assertNetwork, connect, ownerAddress, publicConfig, type Config } from './config.js';
 import { CliError } from './lib/utils.js';
-import registry from './oracles.json' with { type: 'json' };
 import sdkPackage from '@symmetry-hq/sdk/package.json' with { type: 'json' };
 import { priceTransactions } from './prices.js';
 import { withdrawFeeTransactions } from './fees.js';
 import { validateBountyAmount } from './bounty.js';
 import { exactSolBalance } from './rpc.js';
-
-const PYTH_RECEIVER = new PublicKey('rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ');
 
 export class Service {
   readonly connection: Connection;
@@ -45,38 +41,6 @@ export class Service {
   }
   async read(name: CommandName, input: unknown): Promise<unknown> {
     if (name === 'wallet.address') return { address: await this.owner() };
-    if (name === 'token.list') {
-      const assets = Object.entries(registry).map(([mint, feed]) => ({ mint, ...feed }));
-      if (!parse(name, input).checkPrices) return { network: 'mainnet', assets };
-      if (this.config.network !== 'mainnet') throw new CliError('UNSUPPORTED_ASSET', 'Live curated feed checks require mainnet.');
-      await this.checkNetwork();
-      const { context, value } = await this.connection.getMultipleAccountsInfoAndContext([...assets.map(asset => new PublicKey(asset.account)), SYSVAR_CLOCK_PUBKEY], 'confirmed');
-      const clock = value.at(-1)?.data;
-      if (!clock || clock.length !== 40) throw new CliError('ORACLE_RESPONSE_INVALID', 'RPC returned an invalid Clock sysvar.');
-      const now = Number(clock.readBigInt64LE(32));
-      if (!Number.isSafeInteger(now) || now <= 0 || value.length !== assets.length + 1) throw new CliError('ORACLE_RESPONSE_INVALID', 'RPC returned an invalid oracle snapshot.');
-      return { network: 'mainnet', checkedAtSlot: context.slot, chainUnixTimestamp: now, assets: assets.map((asset, index) => {
-        const custodyMaxAgeSeconds = asset.symbol === 'SOL' || asset.symbol === 'USDC' ? 120 : undefined;
-        const oracle = { status: 'invalid', publishTime: null as number | null, ageSeconds: null as number | null, maxAgeSeconds: 600, ...(custodyMaxAgeSeconds ? { custodyMaxAgeSeconds } : {}), fresh: false };
-        const account = value[index];
-        if (!account) oracle.status = 'missing';
-        else if (account.owner.equals(PYTH_RECEIVER) && account.data.length >= 133) {
-          try {
-            const [state] = PythState.decode(account.data, 8);
-            if (state.verificationLevel.kind === 'Full' && state.priceMessage.feedId.toString('hex') === asset.feedId) {
-              const publishTime = state.priceMessage.publishTime.toNumber(), ageSeconds = now - publishTime;
-              if (Number.isSafeInteger(publishTime) && publishTime > 0 && ageSeconds >= 0) {
-                oracle.publishTime = publishTime;
-                oracle.ageSeconds = ageSeconds;
-                oracle.fresh = ageSeconds <= (custodyMaxAgeSeconds ?? oracle.maxAgeSeconds);
-                oracle.status = oracle.fresh ? 'fresh' : 'stale';
-              }
-            }
-          } catch { /* Malformed accounts remain invalid. */ }
-        }
-        return { ...asset, oracle };
-      }) };
-    }
     await this.checkNetwork();
     switch (name) {
       case 'status': {
@@ -128,30 +92,21 @@ export class Service {
     }
   }
 
-  async curatedToken(mint: string): Promise<AddOrEditTokenInput> {
-    const feed = registry[mint as keyof typeof registry];
-    if (this.config.network !== 'mainnet' || !feed) throw new CliError('UNSUPPORTED_ASSET', 'Automatic oracle configuration requires a curated mainnet mint. Use vault token-set with independently verified oracle settings for other assets/networks.');
-    const [price, token] = await this.connection.getMultipleAccountsInfo([new PublicKey(feed.account), new PublicKey(mint)]);
-    if (!price || !price.owner.equals(PYTH_RECEIVER) || !token || ![TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].some(program => program.equals(token.owner))) throw new CliError('INVALID_ORACLE', 'Mint or Pyth price account has an unexpected owner.');
-    const [state] = PythState.decode(price.data, 8);
-    if (state.priceMessage.feedId.toString('hex') !== feed.feedId) throw new CliError('INVALID_ORACLE', 'Pyth feed identity does not match the curated mint.');
-    const decimals = unpackMint(new PublicKey(mint), token, token.owner).decimals;
-    return { token_mint: mint, active: true, min_oracles_thresh: 1, min_conf_bps: 50, conf_thresh_bps: 500, conf_multiplier: 1, oracles: [{ oracle_type: 'pyth', account: feed.account, account_lut_id: 0, account_lut_index: 0, weight_bps: 10000, is_required: true, conf_thresh_bps: 500, volatility_thresh_bps: 5000, max_slippage_bps: 500, min_liquidity: 10000, staleness_thresh: 600, staleness_conf_rate_bps: 0, token_decimals: decimals, twap_seconds_ago: 0, twap_secondary_seconds_ago: 0, quote_token: 'usd' }] };
-  }
-
   async expand(name: CommandName, input: unknown, owner: string): Promise<{ actions: Action[]; first?: TxPayloadBatchSequence; result?: unknown }> {
     if (!commands[name].write) throw new CliError('INVALID_COMMAND', 'Only write commands can create plans.');
     await this.checkNetwork();
     if (name === 'vault.create') {
       const value = parse(name, input);
-      // Validate all prospective feeds before incurring creation costs.
-      if (value.assets) for (const asset of value.assets) await this.curatedToken(asset.mint);
+      const custodyMints = Object.values(MINTS[this.config.network]!).map(key => key.toBase58());
+      if (value.assets?.some(asset => !asset.token && !custodyMints.includes(asset.mint)))
+        throw new CliError('ORACLE_CONFIGURATION_REQUIRED', 'Supply explicit token/oracle settings for every new asset before creating the vault.');
+      if (new Set([...custodyMints, ...(value.assets ?? []).map(asset => asset.mint)]).size > 100)
+        throw new CliError('ASSET_LIMIT', 'Composition exceeds 100 token slots, including protocol custody assets.');
       const first = await this.build({ command: name, input: value }, owner) as VaultCreationTx;
       const actions: Action[] = [{ command: name, input: value }];
       if (value.assets) {
-        const defaults = Object.values(MINTS[this.config.network]!).map(key => key.toBase58());
-        for (const asset of value.assets) if (!defaults.includes(asset.mint)) actions.push({ command: 'vault.add-token', input: { vault: first.vault, mint: asset.mint } });
-        actions.push({ command: 'vault.weights', input: { vault: first.vault, assets: value.assets } });
+        for (const asset of value.assets) if (asset.token) actions.push({ command: 'vault.token-set', input: { vault: first.vault, token: asset.token } });
+        actions.push({ command: 'vault.weights', input: { vault: first.vault, assets: value.assets.map(({ mint, weightBps }) => ({ mint, weightBps })) } });
       }
       return { actions, first, result: { vault: first.vault, mint: first.mint } };
     }
@@ -162,8 +117,11 @@ export class Service {
       const active = vault.composition.slice(0, vault.numTokens).filter(asset => asset.active === 1).map(asset => asset.mint.toBase58());
       const missing = value.assets.filter(asset => !active.includes(asset.mint));
       if (vault.numTokens + missing.filter(asset => !vault.composition.some(existing => existing.mint.toBase58() === asset.mint)).length > 100) throw new CliError('ASSET_LIMIT', 'Composition exceeds 100 token slots.');
-      for (const asset of missing) await this.curatedToken(asset.mint);
-      return { actions: [...missing.map(asset => ({ command: 'vault.add-token' as const, input: { vault: value.vault, mint: asset.mint } })), { command: 'vault.weights', input: value }] };
+      if (missing.some(asset => !asset.token)) throw new CliError('ORACLE_CONFIGURATION_REQUIRED', 'Supply explicit token/oracle settings for each new or inactive asset.');
+      return { actions: [
+        ...value.assets.filter(asset => asset.token).map(asset => ({ command: 'vault.token-set' as const, input: { vault: value.vault, token: asset.token } })),
+        { command: 'vault.weights', input: { vault: value.vault, assets: value.assets.map(({ mint, weightBps }) => ({ mint, weightBps })) } },
+      ] };
     }
     const actions: Action[] = [{ command: name, input: parse(name, input) }];
     if (name === 'vault.deposit') actions.push({ command: 'vault.lock', input: { vault: parse(name, input).vault } });
@@ -185,10 +143,7 @@ export class Service {
         }
         return payload;
       }
-      case 'vault.add-token': {
-        const value = parse(name, input);
-        return this.sdk.addOrEditTokenTx(context(value), await this.curatedToken(value.mint));
-      }
+      case 'vault.add-token':
       case 'vault.token-set': { const value = parse(name, input); return this.sdk.addOrEditTokenTx(context(value), value.token); }
       case 'vault.weights': {
         const value = parse(name, input);

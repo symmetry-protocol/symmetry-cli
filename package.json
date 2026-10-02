@@ -1,6 +1,6 @@
 {
   "name": "@symmetry-hq/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Symmetry v3 vault operations for humans and agents",
   "license": "BUSL-1.1",
   "type": "module",
@@ -21,7 +21,7 @@
     "node": ">=22.15.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "pretest": "npm run build",
     "test": "node --import tsx --test test/*.test.ts",
     "test:package": "npm run build && node test/package-smoke.mjs",

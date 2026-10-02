@@ -20,7 +20,7 @@ npm run test:package
 
 ```sh
 npm pack
-npm install --global ./symmetry-hq-cli-0.1.0.tgz
+npm install --global ./symmetry-hq-cli-0.2.0.tgz
 symmetry --help
 symmetry status
 ```

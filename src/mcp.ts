@@ -8,7 +8,7 @@ import type { Service } from './service.js';
 import type { Transactions } from './transactions.js';
 
 export async function startMcp(service: Service, transactions: Transactions, allowExecute: boolean) {
-  const server = new McpServer({ name: 'symmetry', version: '0.1.0' });
+  const server = new McpServer({ name: 'symmetry', version: '0.2.0' });
   const respond = async (run: () => Promise<unknown>) => {
     try { return { content: [{ type: 'text' as const, text: json({ ok: true, data: await run() }) }] }; }
     catch (error) { return { isError: true, content: [{ type: 'text' as const, text: json({ ok: false, error: errorResult(error) }) }] }; }

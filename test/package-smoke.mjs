@@ -15,6 +15,7 @@ try {
   const { stdout } = await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory]);
   const [packed] = JSON.parse(stdout);
   assert.ok(packed.files.every(file => !/(?:^|\/)(?:test|\.symmetry|node_modules)\/|keypair|\.env(?:\.|$)/.test(file.path)));
+  assert.equal(packed.files.some(file => file.path.endsWith('/oracles.json')), false, 'Build must not ship a stale token/oracle registry');
   const publicDocs = ['docs/AGENT.md', 'docs/RELEASE.md', 'docs/SECURITY.md'];
   assert.deepEqual((await readdir('docs')).map(file => `docs/${file}`).sort(), publicDocs);
   assert.deepEqual(manifest.files.filter(path => path === 'docs' || path.startsWith('docs/')).sort(), publicDocs);
@@ -37,7 +38,9 @@ try {
   try {
     await client.connect(transport);
     assert.ok((await client.listTools()).tools.some(tool => tool.name === 'symmetry_vault_deposit'));
-    assert.equal((await client.callTool({ name: 'symmetry_token_list', arguments: {} })).isError, undefined);
+    const tools = (await client.listTools()).tools;
+    assert.equal(tools.some(tool => tool.name === 'symmetry_token_list'), false);
+    assert.ok(tools.find(tool => tool.name === 'symmetry_vault_add_token').inputSchema.required.includes('token'));
     assert.ok((await client.readResource({ uri: 'symmetry://commands' })).contents.length > 0);
     assert.equal((await client.readResource({ uri: 'symmetry://context' })).contents[0].text, agentGuide);
   } finally { await client.close(); }

@@ -7,8 +7,16 @@ import { getRebalanceIntentPda } from '@symmetry-hq/sdk/dist/instructions/pda.js
 import { VAULTS_V3_PROGRAM_ID } from '@symmetry-hq/sdk/dist/constants.js';
 import { Service } from '../src/service.js';
 import { configSchema } from '../src/config.js';
+import { parse, type Input } from '../src/commands.js';
 
 const owner = Keypair.generate().publicKey.toBase58(), vaultAddress = Keypair.generate().publicKey, mint = Keypair.generate().publicKey, asset = Keypair.generate().publicKey;
+function tokenSettings(mint: string): Input<'vault.token-set'>['token'] {
+  return { token_mint: mint, active: true, min_oracles_thresh: 1, min_conf_bps: 20, conf_thresh_bps: 200, conf_multiplier: 2,
+    oracles: [{ oracle_type: 'pyth', account: Keypair.generate().publicKey.toBase58(), account_lut_id: 0, account_lut_index: 0,
+      weight_bps: 10000, is_required: true, conf_thresh_bps: 200, volatility_thresh_bps: 300, max_slippage_bps: 40,
+      min_liquidity: 12345, staleness_thresh: 90, staleness_conf_rate_bps: 1, token_decimals: 6,
+      twap_seconds_ago: 0, twap_secondary_seconds_ago: 0, quote_token: 'usd' }] };
+}
 const vault = () => ({ ownAddress: vaultAddress, mint, numTokens: 1, settings: { addTokenDelay: new BN(0), updateWeightsDelay: new BN(0) }, composition: [{ mint: asset, weight: 10000, active: 1 }] }) as unknown as Vault;
 function fixture() {
   const current = vault();
@@ -18,7 +26,7 @@ function fixture() {
   const global = { bountyMint: new PublicKey('So11111111111111111111111111111111111111112'), bountyBondAmount: new BN(100000), bountyPerTask: { maxBounty: new BN(250000) }, bountyPerPriceUpdateTaskDivisor: new BN(3) };
   const sdk = new Proxy({}, { get: (_target, method: string) => async (...args: unknown[]) => {
     calls.push({ method, args });
-    return method === 'fetchVault' ? current : method === 'fetchRebalanceIntent' ? { chain_data: pending } : method === 'fetchGlobalConfig' ? global : payload;
+    return method === 'fetchVault' ? current : method === 'fetchRebalanceIntent' ? { chain_data: pending } : method === 'fetchGlobalConfig' ? global : method === 'createVaultTx' ? { ...payload, vault: vaultAddress.toBase58(), mint: mint.toBase58() } : payload;
   } }) as SymmetryCore;
   const connection = { getAccountInfo: async () => null } as unknown as Connection;
   const service = new Service(configSchema.parse({ owner, network: 'mainnet' }), connection, sdk);
@@ -111,9 +119,11 @@ test('status reports the installed SDK version', async () => {
 });
 test('compose schedules missing assets first and builds weights only after their activation', async () => {
   const f = fixture(), additional = Keypair.generate().publicKey;
-  f.service.curatedToken = async () => ({}) as never;
-  const expanded = await f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets: [{ mint: additional.toBase58(), weightBps: 10000 }] }, owner);
-  assert.deepEqual(expanded.actions.map(action => action.command), ['vault.add-token', 'vault.weights']);
+  const token = tokenSettings(additional.toBase58());
+  const expanded = await f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets: [{ mint: additional.toBase58(), weightBps: 10000, token }] }, owner);
+  assert.deepEqual(expanded.actions.map(action => action.command), ['vault.token-set', 'vault.weights']);
+  await f.service.build(expanded.actions[0]!, owner);
+  assert.deepEqual(f.calls.find(call => call.method === 'addOrEditTokenTx')?.args[1], token);
   await assert.rejects(f.service.build(expanded.actions[1]!, owner), /must be active/);
   f.current.composition.push({ mint: additional, weight: 0, active: 1 } as never); f.current.numTokens++;
   await f.service.build(expanded.actions[1]!, owner);
@@ -127,9 +137,75 @@ test('compose refuses time locks; verification detects changed or missing weight
   f.current.composition[0]!.weight = 5000;
   await assert.rejects(f.service.verify([{ command: 'vault.weights', input }]), /do not match/);
 });
-test('mainnet curated mappings are not silently applied to devnet', async () => {
-  const f = fixture(); f.service.config.network = 'devnet';
-  await assert.rejects(f.service.curatedToken('So11111111111111111111111111111111111111112'), /mainnet mint/);
+test('creation and composition reject missing oracle choices without selecting replacement assets', async () => {
+  const f = fixture(), additional = Keypair.generate().publicKey.toBase58();
+  for (const mint of [additional, 'CLoUDKc4Ane7HeQcPpE3YHnznRxhMimJ4MyaUqyHFzAu']) {
+    const assets = [{ mint, weightBps: 10000 }];
+    await assert.rejects(f.service.expand('vault.create', { name: 'Test', symbol: 'TEST', assets }, owner), error => (error as { code: string }).code === 'ORACLE_CONFIGURATION_REQUIRED');
+    await assert.rejects(f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets }, owner), error => (error as { code: string }).code === 'ORACLE_CONFIGURATION_REQUIRED');
+  }
+  assert.equal(f.calls.some(call => ['createVaultTx', 'addOrEditTokenTx', 'updateWeightsTx'].includes(call.method)), false);
+  const existing = [{ mint: asset.toBase58(), weightBps: 10000 }];
+  assert.deepEqual((await f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets: existing }, owner)).actions, [{ command: 'vault.weights', input: { vault: vaultAddress.toBase58(), assets: existing } }]);
+  f.current.composition[0]!.active = 0;
+  await assert.rejects(f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets: existing }, owner), /explicit token\/oracle settings/);
+});
+test('creation accepts independently selected mints on either network and retains all caller settings', async () => {
+  for (const network of ['mainnet', 'devnet'] as const) {
+    const f = fixture(), selectedMint = Keypair.generate().publicKey.toBase58(), token = tokenSettings(selectedMint);
+    f.service.config.network = network;
+    let slot = 1; f.connection.getSlot = async () => slot++;
+    const result = await f.service.expand('vault.create', { name: 'Test', symbol: 'TEST', assets: [{ mint: selectedMint, weightBps: 10000, token }] }, owner);
+    assert.deepEqual(result.actions.slice(1), [
+      { command: 'vault.token-set', input: { vault: vaultAddress.toBase58(), token } },
+      { command: 'vault.weights', input: { vault: vaultAddress.toBase58(), assets: [{ mint: selectedMint, weightBps: 10000 }] } },
+    ]);
+    await f.service.build(result.actions[1]!, owner);
+    assert.deepEqual(f.calls.find(call => call.method === 'addOrEditTokenTx')!.args[1], token);
+  }
+});
+test('explicit settings for existing assets are applied before weights, not silently discarded', async () => {
+  const f = fixture(), token = tokenSettings(asset.toBase58());
+  const result = await f.service.expand('vault.compose', { vault: vaultAddress.toBase58(), assets: [{ mint: asset.toBase58(), weightBps: 10000, token }] }, owner);
+  assert.deepEqual(result.actions.map(action => action.command), ['vault.token-set', 'vault.weights']);
+  for (const action of result.actions) await f.service.build(action, owner);
+  assert.deepEqual(f.calls.find(call => call.method === 'addOrEditTokenTx')!.args[1], token);
+  assert.deepEqual(f.calls.find(call => call.method === 'updateWeightsTx')!.args[1], { token_weights: [{ mint: asset.toBase58(), weight_bps: 10000 }] });
+});
+test('mint-only, mismatched, inactive and incomplete oracle configurations fail input validation', async () => {
+  const f = fixture(), token = tokenSettings(asset.toBase58()), base = { vault: vaultAddress.toBase58() };
+  await assert.rejects(f.service.expand('vault.add-token', { ...base, mint: asset.toBase58() }, owner));
+  for (const change of [{ token_mint: Keypair.generate().publicKey.toBase58() }, { active: false }, { oracles: [] }]) {
+    const assets = [{ mint: asset.toBase58(), weightBps: 10000, token: { ...token, ...change } }];
+    await assert.rejects(f.service.expand('vault.create', { name: 'Test', symbol: 'TEST', assets }, owner));
+    await assert.rejects(f.service.expand('vault.compose', { ...base, assets }, owner));
+  }
+  const incomplete = { ...token, oracles: token.oracles.map(({ staleness_thresh, ...oracle }) => oracle) };
+  await assert.rejects(f.service.expand('vault.add-token', { ...base, token: incomplete }, owner));
+  assert.throws(() => parse('vault.weights', { ...base, assets: [{ mint: asset.toBase58(), weightBps: 10000, token }] }));
+  assert.equal(f.calls.length, 0);
+});
+test('both explicit token commands pass through each supported caller-selected oracle type', async () => {
+  const f = fixture();
+  for (const command of ['vault.add-token', 'vault.token-set'] as const) {
+    for (const oracleType of ['pyth', 'raydium_cpmm', 'raydium_clmm'] as const) {
+      const token = tokenSettings(Keypair.generate().publicKey.toBase58());
+      token.oracles[0]!.oracle_type = oracleType;
+      await f.service.build({ command, input: { vault: vaultAddress.toBase58(), token, activationTimestamp: 123 } }, owner);
+      assert.deepEqual(f.calls.at(-1)!.args, [{ vault: vaultAddress.toBase58(), manager: owner, activation_timestamp: 123, expiration_timestamp: undefined }, token]);
+    }
+  }
+});
+test('creation counts protocol custody slots and never inserts them into the requested weights', async () => {
+  const f = fixture(); let slot = 1; f.connection.getSlot = async () => slot++;
+  const assets = Array.from({ length: 100 }, (_, index) => {
+    const mint = Keypair.generate().publicKey.toBase58();
+    return { mint, weightBps: index === 0 ? 10000 : 0, token: tokenSettings(mint) };
+  });
+  await assert.rejects(f.service.expand('vault.create', { name: 'Test', symbol: 'TEST', assets }, owner), error => (error as { code: string }).code === 'ASSET_LIMIT');
+  const sol = 'So11111111111111111111111111111111111111112';
+  const result = await f.service.expand('vault.create', { name: 'Test', symbol: 'TEST', assets: [{ mint: sol, weightBps: 10000 }] }, owner);
+  assert.deepEqual(result.actions.slice(1), [{ command: 'vault.weights', input: { vault: vaultAddress.toBase58(), assets: [{ mint: sol, weightBps: 10000 }] } }]);
 });
 test('creation waits for its lookup-table slot to become recent before returning', async () => {
   const f = fixture(); let reads = 0;
