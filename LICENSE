@@ -1,0 +1,41 @@
+Business Source License 1.1
+
+Licensor:  Symmetry Protocol
+Licensed Work:  @symmetry-hq/cli
+Change Date:  None
+Change License:  None
+
+Additional Use Grant
+
+You may use the Licensed Work in production, including for commercial purposes,
+to build applications, services, and products that integrate with the Symmetry
+Protocol.
+
+You may NOT use the Licensed Work to create a competing SDK, library, or
+protocol infrastructure that replicates or substitutes the functionality of the
+Licensed Work or the Symmetry Protocol.
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Except for the Additional Use Grant and the right of non-production use, all
+rights in the Licensed Work remain exclusively with the Licensor.
+
+If the Licensor specifies a Change Date, the Licensed Work will be made
+available under the Change License on the Change Date. No Change Date has been
+specified for this Licensed Work.
+
+Notice
+
+Business Source License 1.1 is not an Open Source license. However, the
+Licensed Work may eventually be made available under an Open Source License, as
+stated in this License.
+
+For the full text of the Business Source License 1.1, see:
+https://mariadb.com/bsl11/
+
+Copyright (c) 2026 Symmetry Protocol. All rights reserved.

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tgz
+.symmetry/
+*.keypair.json
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

@@ -1,0 +1,6 @@
+{
+  "network": "mainnet",
+  "rpcUrl": "https://api.mainnet-beta.solana.com",
+  "priorityFee": 25000,
+  "timeoutMs": 60000
+}

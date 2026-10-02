@@ -1,0 +1,58 @@
+{
+  "name": "@symmetry-hq/cli",
+  "version": "0.1.0",
+  "description": "Symmetry v3 vault operations for humans and agents",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "bin": {
+    "symmetry": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/AGENT.md",
+    "docs/SECURITY.md",
+    "docs/RELEASE.md",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:package": "npm run build && node test/package-smoke.mjs",
+    "check": "npm test",
+    "prepack": "npm run check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "@solana/spl-token": "0.4.14",
+    "@solana/web3.js": "1.98.4",
+    "@symmetry-hq/sdk": "1.0.23",
+    "bigint-buffer": "npm:@trufflesuite/bigint-buffer@1.1.10",
+    "bs58": "6.0.0",
+    "commander": "14.0.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/bn.js": "5.2.0",
+    "@types/node": "22.15.30",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/symmetry-protocol/symmetry-cli.git"
+  },
+  "homepage": "https://github.com/symmetry-protocol/symmetry-cli#readme",
+  "bugs": {
+    "url": "https://github.com/symmetry-protocol/symmetry-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
