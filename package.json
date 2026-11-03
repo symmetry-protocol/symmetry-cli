@@ -36,7 +36,7 @@
     "bigint-buffer": "npm:@trufflesuite/bigint-buffer@1.1.10",
     "bs58": "6.0.0",
     "commander": "14.0.3",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/bn.js": "5.2.0",
